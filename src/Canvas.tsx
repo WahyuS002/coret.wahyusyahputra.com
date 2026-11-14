@@ -17,22 +17,31 @@ const toDataURL = (blob: Blob) =>
 		reader.readAsDataURL(blob);
 	});
 
-/** The part of `image` under `box`, cut from its bitmap. Small marks (one word) are scaled up so the model can read them. */
+/**
+ * The part of `image` around `box`, cut from its bitmap, with the box itself outlined in red.
+ * The margin gives the model the surrounding words, so a tight box on one word (or one that clips a letter) still reads right.
+ * Small marks are scaled up so the model can read them.
+ */
 async function crop(src: string, image: Box, box: Box): Promise<string> {
 	const bitmap = new Image();
 	bitmap.src = src;
 	await bitmap.decode();
 	const sx = bitmap.naturalWidth / image.width;
 	const sy = bitmap.naturalHeight / image.height;
-	const left = Math.max(box.x, image.x);
-	const top = Math.max(box.y, image.y);
-	const width = (Math.min(box.x + box.width, image.x + image.width) - left) * sx;
-	const height = (Math.min(box.y + box.height, image.y + image.height) - top) * sy;
-	const up = Math.max(1, 512 / Math.max(width, height));
+	const pad = Math.min(Math.max(box.width, box.height), 150); // scene units; capped so a whole panel doesn't pull in half the page
+	const left = Math.max(box.x - pad, image.x);
+	const top = Math.max(box.y - pad, image.y);
+	const width = (Math.min(box.x + box.width + pad, image.x + image.width) - left) * sx;
+	const height = (Math.min(box.y + box.height + pad, image.y + image.height) - top) * sy;
+	const up = Math.max(1, 768 / Math.max(width, height));
 	const canvas = document.createElement('canvas');
 	canvas.width = Math.round(width * up);
 	canvas.height = Math.round(height * up);
-	canvas.getContext('2d')!.drawImage(bitmap, (left - image.x) * sx, (top - image.y) * sy, width, height, 0, 0, canvas.width, canvas.height);
+	const context = canvas.getContext('2d')!;
+	context.drawImage(bitmap, (left - image.x) * sx, (top - image.y) * sy, width, height, 0, 0, canvas.width, canvas.height);
+	context.strokeStyle = '#e03131';
+	context.lineWidth = Math.max(3, canvas.width / 200);
+	context.strokeRect((box.x - left) * sx * up, (box.y - top) * sy * up, box.width * sx * up, box.height * sy * up);
 	return canvas.toDataURL('image/jpeg', 0.9);
 }
 

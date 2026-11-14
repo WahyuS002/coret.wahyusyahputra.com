@@ -10,7 +10,8 @@ const fail = (status: number, message: string) => json({ error: message }, statu
 
 // Asks for a gloss the size of a margin note, the way the user writes them by hand.
 const PROMPT = `Kamu membantu orang Indonesia membaca teks berbahasa Inggris (sering komik atau buku lama).
-Gambar adalah potongan halaman yang ditandai pembaca. Jelaskan artinya dalam Bahasa Indonesia sesingkat catatan di pinggir halaman:
+Gambar adalah potongan halaman. Bagian yang ditanyakan pembaca diberi kotak merah; sisanya hanya konteks, jangan dijelaskan.
+Jelaskan bagian dalam kotak merah dalam Bahasa Indonesia sesingkat catatan di pinggir halaman, sesuai artinya di kalimat itu:
 - satu kata atau frasa: beri artinya, plus konteks singkat kalau ejaannya lama atau dialek (mis. "O'" = "of").
 - satu kalimat atau balon kata: terjemahan bebas yang enak dibaca.
 - gambar tanpa teks: sebut apa itu dalam beberapa kata.
