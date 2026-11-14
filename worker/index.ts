@@ -39,6 +39,13 @@ async function explain(request: Request, env: Env) {
 	return json({ text: data.choices?.[0]?.message?.content?.trim() ?? '' });
 }
 
+/** Removes a deleted canvas's files from R2: its drawing, its PDF, and every image pasted into it. */
+async function purge(env: Env, key: string, pdf: string | null | undefined) {
+	const scene = await (await env.FILES.get(`canvas/${key}.json`))?.json<{ images?: Record<string, string> }>();
+	const files = [...Object.values(scene?.images ?? {}), ...(pdf ? [pdf] : [])].filter(name => /^[0-9a-f-]{36}\.\w+$/.test(name));
+	await env.FILES.delete([`canvas/${key}.json`, ...files.map(name => `files/${name}`)]);
+}
+
 async function api(request: Request, env: Env, path: string[]): Promise<Response> {
 	const [resource, key] = path;
 	const method = request.method;
@@ -54,13 +61,14 @@ async function api(request: Request, env: Env, path: string[]): Promise<Response
 		if (!item || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 300 || (item.kind !== 'folder' && item.kind !== 'canvas') || typeof item.updated !== 'string' || !Number.isFinite(Date.parse(item.updated)))
 			return fail(400, 'Data tidak valid');
 		// Last write wins: an older copy from another device never overwrites a newer one.
-		await env.DB.prepare(
+		const { meta } = await env.DB.prepare(
 			`INSERT INTO items (id, parent_id, name, kind, pdf, updated, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 			 ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name, pdf = excluded.pdf, updated = excluded.updated, deleted = excluded.deleted
 			 WHERE excluded.updated > items.updated`,
 		)
 			.bind(key, item.parentId ?? null, item.name.trim(), item.kind, item.pdf ?? null, item.updated, item.deleted ? 1 : 0)
 			.run();
+		if (item.deleted && item.kind === 'canvas' && meta.changes) await purge(env, key, item.pdf);
 		return json({ ok: true });
 	}
 
@@ -70,6 +78,8 @@ async function api(request: Request, env: Env, path: string[]): Promise<Response
 			return object ? new Response(object.body, { headers: { 'content-type': 'application/json' } }) : json(null);
 		}
 		if (method === 'PUT') {
+			// A save still in flight when its canvas is deleted must not bring the drawing back.
+			if (await env.DB.prepare('SELECT 1 FROM items WHERE id = ?1 AND deleted = 1').bind(key).first()) return fail(410, 'Canvas sudah dihapus');
 			await env.FILES.put(`canvas/${key}.json`, request.body, { httpMetadata: { contentType: 'application/json' } });
 			return json({ ok: true });
 		}

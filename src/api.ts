@@ -1,4 +1,4 @@
-export type Item = { id: string; parentId: string | null; name: string; kind: 'folder' | 'canvas'; pdf: string | null; updated: string };
+export type Item = { id: string; parentId: string | null; name: string; kind: 'folder' | 'canvas'; pdf: string | null; updated: string; deleted?: boolean };
 /** What a canvas keeps in R2. `images` maps an Excalidraw file id to its upload in R2; PDF pages are not in it, they are rendered from the PDF. */
 export type Scene = { elements: readonly unknown[]; images: Record<string, string> };
 

@@ -197,7 +197,7 @@ export function Canvas({ item }: { item: Item }) {
 
 	if (!scene)
 		return (
-			<div ref={container} className="h-full p-6 text-sm text-neutral-500">
+			<div ref={container} className="h-full p-6 text-sm text-ink-muted">
 				{status || 'Memuat…'}
 			</div>
 		);
@@ -211,14 +211,14 @@ export function Canvas({ item }: { item: Item }) {
 				setApi(instance);
 				if (import.meta.env.DEV) Object.assign(window, { excalidraw: instance });
 			}}
-			// Grey around a PDF so its white pages stand out.
-			initialData={{ elements: scene.elements as ExcalidrawElement[], appState: { viewBackgroundColor: item.pdf ? '#ececec' : '#ffffff', ...start }, scrollToContent: !first }}
+			// Same grey as the empty canvas area; white PDF pages stand out on it.
+			initialData={{ elements: scene.elements as ExcalidrawElement[], appState: { viewBackgroundColor: '#eeeded', ...start }, scrollToContent: !first }}
 			onChange={onChange}
 			langCode="id-ID"
 			renderTopRightUI={() => (
 				<div className="flex items-center gap-2">
-					{status && <span className="max-w-64 truncate text-xs text-neutral-500">{status}</span>}
-					<button onClick={explainSelection} disabled={busy} className="rounded-lg bg-violet-600 px-3 py-2 text-sm text-white disabled:opacity-50" title="Kotakin bagian halaman, pilih kotaknya, lalu klik">
+					{status && <span className="max-w-64 truncate text-xs text-ink-muted">{status}</span>}
+					<button onClick={explainSelection} disabled={busy} className="rounded-lg bg-ink px-3.5 py-2 text-sm font-medium text-paper transition-colors duration-150 hover:bg-ink/85 disabled:opacity-50" title="Kotakin bagian halaman, pilih kotaknya, lalu klik">
 						{busy ? '…' : 'Jelaskan'}
 					</button>
 				</div>
