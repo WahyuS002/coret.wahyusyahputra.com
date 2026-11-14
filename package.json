@@ -1,0 +1,29 @@
+{
+  "name": "coret",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "deploy": "pnpm build && wrangler d1 migrations apply coret --remote && wrangler deploy",
+    "types": "wrangler types",
+    "test": "node src/geometry.test.ts"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
+    "pdfjs-dist": "^6.5.438",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.69.1",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "wrangler": "^4.161.0"
+  }
+}
