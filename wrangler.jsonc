@@ -10,13 +10,13 @@
 	"routes": [{ "pattern": "coret.wahyusyahputra.com", "custom_domain": true }],
 	"vars": {
 		"ACCESS_TEAM_DOMAIN": "little-grass-482c.cloudflareaccess.com",
-		"ACCESS_AUD": ""
+		"ACCESS_AUD": "b65e3005dc5bb40f72cd303775942a2658743a6af273fd494f2b8d9bf68d96b0"
 	},
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "coret",
-			"database_id": "00000000-0000-0000-0000-000000000000",
+			"database_id": "e4029501-e9ae-4bee-bc94-a7ea7bf9e977",
 			"migrations_dir": "migrations"
 		}
 	],
