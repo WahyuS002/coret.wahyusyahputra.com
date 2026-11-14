@@ -15,11 +15,23 @@ Jelaskan bagian dalam kotak merah dalam Bahasa Indonesia sesingkat catatan di pi
 - satu kata atau frasa: beri artinya, plus konteks singkat kalau ejaannya lama atau dialek (mis. "O'" = "of").
 - satu kalimat atau balon kata: terjemahan bebas yang enak dibaca.
 - gambar tanpa teks: sebut apa itu dalam beberapa kata.
-Maksimal 25 kata. Tanpa pembuka, tanpa tanda kutip, tanpa markdown.`;
+Jawaban pertama maksimal 25 kata. Tanpa pembuka, tanpa tanda kutip, tanpa markdown.
+Kalau pembaca lalu bertanya lanjutan, jawab pertanyaannya tentang bagian yang sama, jelas dan seperlunya, maksimal 100 kata, tetap tanpa markdown.`;
+
+/** One question and its answer; the first answer explains the mark and has no question. */
+type Turn = { q: string | null; a: string };
+const isTurns = (turns: unknown): turns is Turn[] =>
+	Array.isArray(turns) &&
+	turns.length <= 20 &&
+	turns.every((turn: Turn, index) => turn && typeof turn.a === 'string' && turn.a.length <= 4000 && (index === 0 ? turn.q === null : typeof turn.q === 'string' && turn.q.length <= 1000));
 
 async function explain(request: Request, env: Env) {
-	const { image } = (await request.json().catch(() => ({}))) as { image?: unknown };
+	const { image, turns = [], question } = (await request.json().catch(() => ({}))) as { image?: unknown; turns?: unknown; question?: unknown };
 	if (typeof image !== 'string' || !image.startsWith('data:image/') || image.length > 8_000_000) return fail(400, 'Gambar tidak valid');
+	// A follow-up sends the whole conversation so far plus the new question; a first ask sends neither.
+	const followUp = question !== undefined;
+	if (followUp && (typeof question !== 'string' || !question.trim() || question.length > 1000)) return fail(400, 'Pertanyaan tidak valid');
+	if (!isTurns(turns) || turns.length > 0 !== followUp) return fail(400, 'Riwayat tidak valid');
 	if (!env.DEEPSEEK_API_KEY) return fail(500, 'DEEPSEEK_API_KEY belum di-set');
 	const response = await fetch('https://api.deepseek.com/chat/completions', {
 		method: 'POST',
@@ -27,10 +39,12 @@ async function explain(request: Request, env: Env) {
 		body: JSON.stringify({
 			model: 'deepseek-flash',
 			thinking: { type: 'disabled' },
-			max_tokens: 200,
+			max_tokens: followUp ? 600 : 200,
 			messages: [
 				{ role: 'system', content: PROMPT },
 				{ role: 'user', content: [{ type: 'image_url', image_url: { url: image } }] },
+				...turns.flatMap(turn => [...(turn.q === null ? [] : [{ role: 'user', content: turn.q }]), { role: 'assistant', content: turn.a }]),
+				...(followUp ? [{ role: 'user', content: question }] : []),
 			],
 		}),
 	});

@@ -7,7 +7,7 @@
     "build": "tsc && vite build",
     "deploy": "pnpm build && wrangler d1 migrations apply coret --remote && wrangler deploy",
     "types": "wrangler types",
-    "test": "node src/geometry.test.ts"
+    "test": "node src/geometry.test.ts && node src/explanations.test.ts"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",

@@ -1,12 +1,25 @@
-import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements, getSceneVersion, restoreElements } from '@excalidraw/excalidraw';
+import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements, getSceneVersion, newElementWith, restoreElements } from '@excalidraw/excalidraw';
 import type { ExcalidrawElement, ExcalidrawImageElement, FileId } from '@excalidraw/excalidraw/element/types';
-import type { BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
+import type { BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI, NormalizedZoomValue } from '@excalidraw/excalidraw/types';
 import { useEffect, useRef, useState } from 'react';
 import { explain, loadScene, saveScene, uploadFile, type Item, type Scene } from './api.ts';
-import { overlap, wrap, type Box } from './geometry.ts';
+import { followOwners, type Part } from './explanations.ts';
+import { overlap, wrap } from './geometry.ts';
+import { cropMark, pageOf, pageUnder, type PageData } from './crop.ts';
+import { ExplainSheet, NoteButton } from './ExplainSheet.tsx';
 import { pageElements, renderPage } from './pdf.ts';
 
-type PageData = { pdf: string; page: number };
+// Where each canvas was last viewed, kept per browser so a refresh lands back on the same spot.
+type View = { scrollX: number; scrollY: number; zoom: number };
+const viewKey = (id: string) => `coret:view:${id}`;
+function lastView(id: string): View | null {
+	try {
+		const view = JSON.parse(localStorage.getItem(viewKey(id)) ?? 'null') as View | null;
+		return view && [view.scrollX, view.scrollY, view.zoom].every(Number.isFinite) && view.zoom > 0 ? view : null;
+	} catch {
+		return null;
+	}
+}
 
 // The first pages of every PDF opened, so switching back to one shows it at once.
 // ponytail: two rendered pages (~0.5 MB) per PDF stay in memory for the tab's life; bound it if people open hundreds
@@ -22,7 +35,6 @@ const firstPage = ({ fileId, customData }: ExcalidrawImageElement) => {
 	return firstPages.get(id)!;
 };
 
-const pageOf = (element: ExcalidrawElement) => element.customData as PageData | undefined;
 const toDataURL = (blob: Blob) =>
 	new Promise<string>((resolve, reject) => {
 		const reader = new FileReader();
@@ -30,34 +42,6 @@ const toDataURL = (blob: Blob) =>
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(blob);
 	});
-
-/**
- * The part of `image` around `box`, cut from its bitmap, with the box itself outlined in red.
- * The margin gives the model the surrounding words, so a tight box on one word (or one that clips a letter) still reads right.
- * Small marks are scaled up so the model can read them.
- */
-async function crop(src: string, image: Box, box: Box): Promise<string> {
-	const bitmap = new Image();
-	bitmap.src = src;
-	await bitmap.decode();
-	const sx = bitmap.naturalWidth / image.width;
-	const sy = bitmap.naturalHeight / image.height;
-	const pad = Math.min(Math.max(box.width, box.height), 150); // scene units; capped so a whole panel doesn't pull in half the page
-	const left = Math.max(box.x - pad, image.x);
-	const top = Math.max(box.y - pad, image.y);
-	const width = (Math.min(box.x + box.width + pad, image.x + image.width) - left) * sx;
-	const height = (Math.min(box.y + box.height + pad, image.y + image.height) - top) * sy;
-	const up = Math.max(1, 768 / Math.max(width, height));
-	const canvas = document.createElement('canvas');
-	canvas.width = Math.round(width * up);
-	canvas.height = Math.round(height * up);
-	const context = canvas.getContext('2d')!;
-	context.drawImage(bitmap, (left - image.x) * sx, (top - image.y) * sy, width, height, 0, 0, canvas.width, canvas.height);
-	context.strokeStyle = '#e03131';
-	context.lineWidth = Math.max(3, canvas.width / 200);
-	context.strokeRect((box.x - left) * sx * up, (box.y - top) * sy * up, box.width * sx * up, box.height * sy * up);
-	return canvas.toDataURL('image/jpeg', 0.9);
-}
 
 export function Canvas({ item }: { item: Item }) {
 	const [scene, setScene] = useState<Scene | null>(null);
@@ -75,6 +59,8 @@ export function Canvas({ item }: { item: Item }) {
 	const timer = useRef<number | undefined>(undefined);
 	const queue = useRef(Promise.resolve());
 	const container = useRef<HTMLDivElement>(null);
+	const area = useRef<HTMLDivElement>(null);
+	const [sheet, setSheet] = useState<string | null>(null); // the note whose conversation is open
 
 	useEffect(() => {
 		loadScene(item.id)
@@ -83,7 +69,11 @@ export function Canvas({ item }: { item: Item }) {
 				// Pages lost to an old save bug (canvas switched within a second of opening) come back from the PDF.
 				if (item.pdf && !elements.some(element => pageOf(element as ExcalidrawElement))) elements = [...(await pageElements(item.pdf)), ...elements];
 				// Pages in the first screen are drawn before the canvas shows, so it doesn't appear empty and fill in a moment later.
-				const pages = (elements as ExcalidrawElement[]).filter((element): element is ExcalidrawImageElement => element.type === 'image' && !!pageOf(element)).slice(0, 2);
+				const all = (elements as ExcalidrawElement[]).filter((element): element is ExcalidrawImageElement => element.type === 'image' && !!pageOf(element));
+				const view = lastView(item.id);
+				const screen = view && { x: -view.scrollX, y: -view.scrollY, width: (container.current?.clientWidth ?? 0) / view.zoom, height: (container.current?.clientHeight ?? 0) / view.zoom };
+				const visible = screen ? all.filter(page => overlap(page, screen) > 0) : [];
+				const pages = (visible.length ? visible : all).slice(0, 2);
 				initialFiles.current = await Promise.all(pages.map(firstPage)).catch(() => []);
 				for (const file of initialFiles.current) requested.current.add(file.id);
 				if (elements === loaded?.elements) savedVersion.current = getSceneVersion(elements as ExcalidrawElement[]); // opening isn't a change to save
@@ -150,6 +140,13 @@ export function Canvas({ item }: { item: Item }) {
 	}
 
 	function onChange(elements: readonly ExcalidrawElement[], _: unknown, files: BinaryFiles) {
+		// A Jelaskan note goes with its mark and comes back with it on undo; kept out of history so one undo restores all.
+		const follow = followOwners(elements as readonly Part[]);
+		if (follow.size)
+			return apiRef.current?.updateScene({
+				elements: elements.map(element => (follow.has(element.id) ? newElementWith(element, { isDeleted: follow.get(element.id)!, customData: { ...element.customData, cascaded: follow.get(element.id) } }) : element)),
+				captureUpdate: CaptureUpdateAction.NEVER,
+			}); // that update calls onChange again, which saves
 		latest.current = { elements, files };
 		showPages();
 		const version = getSceneVersion(elements);
@@ -179,18 +176,14 @@ export function Canvas({ item }: { item: Item }) {
 		const selected = elements.filter(element => selectedElementIds[element.id]);
 		if (selected.length !== 1) return setStatus('Pilih satu kotak dulu');
 		const [box] = selected;
-		const target = elements
-			.filter((element): element is ExcalidrawImageElement => element.type === 'image' && element.id !== box.id && !!element.fileId && overlap(element, box) > 0)
-			.sort((a, b) => overlap(b, box) - overlap(a, box))[0];
-		if (!target?.fileId) return setStatus('Kotaknya harus di atas halaman atau gambar');
+		const target = pageUnder(api, box);
+		if (!target) return setStatus('Kotaknya harus di atas halaman atau gambar');
 
 		setBusy(true);
 		setStatus('Bertanya ke DeepSeek…');
 		try {
-			const page = pageOf(target);
-			const src = api.getFiles()[target.fileId]?.dataURL ?? (page ? await renderPage(page.pdf, page.page) : null);
-			if (!src) throw new Error('gambarnya belum termuat');
-			const text = wrap(await explain(await crop(src, target, box)));
+			const answer = await explain(await cropMark(api, box, target));
+			const text = wrap(answer);
 
 			// Next to the page, level with the mark, moved down past any note already there.
 			const x = target.x + target.width + 80;
@@ -205,11 +198,21 @@ export function Canvas({ item }: { item: Item }) {
 			const id = crypto.randomUUID();
 			const start = { x: box.x + box.width, y: box.y + box.height / 2 };
 			// restoreElements moves the arrow's first point to 0,0 as Excalidraw expects; left as converted, dragging the note flings the arrow off-canvas
-			const added = restoreElements(convertToExcalidrawElements([
-				{ type: 'rectangle', id, x, y, roundness: { type: 3 }, label: { text, fontSize: 20, textAlign: 'left' } },
-				{ type: 'arrow', ...start, width: x - start.x, height: y + height / 2 - start.y, strokeColor: '#4a8fd6', end: { id } },
-			]), null);
-			api.updateScene({ elements: [...api.getSceneElementsIncludingDeleted(), ...added], captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+			const arrowId = crypto.randomUUID();
+			const bindable = ['rectangle', 'ellipse', 'diamond'].includes(box.type);
+			const added = restoreElements(
+				convertToExcalidrawElements([
+					{ type: 'rectangle', id, x, y, roundness: { type: 3 }, label: { text, fontSize: 20, textAlign: 'left' }, customData: { owner: box.id, turns: [{ q: null, a: answer }] } },
+					{ type: 'arrow', id: arrowId, ...start, width: x - start.x, height: y + height / 2 - start.y, strokeColor: '#4a8fd6', opacity: 40, end: { id }, customData: { owner: id } },
+				], { regenerateIds: false }), // keep our ids: customData.owner and the start binding point at them
+				null,
+			).map(element =>
+				element.type === 'text' ? { ...element, customData: { owner: id } } // the note's label goes with the note
+				: element.id === arrowId && bindable ? { ...element, startBinding: { elementId: box.id, focus: 0, gap: 1 } } // arrow follows the mark when it moves
+				: element,
+			);
+			const mark = bindable ? newElementWith(box, { boundElements: [...(box.boundElements ?? []), { type: 'arrow', id: arrowId }] }) : box;
+			api.updateScene({ elements: [...api.getSceneElementsIncludingDeleted().map(element => (element.id === box.id ? mark : element)), ...added], captureUpdate: CaptureUpdateAction.IMMEDIATELY });
 			setStatus('');
 		} catch (error) {
 			setStatus(`Gagal: ${(error as Error).message}`);
@@ -225,28 +228,40 @@ export function Canvas({ item }: { item: Item }) {
 				{status || <span className="appear-late">Memuat…</span>}
 			</div>
 		);
-	// A PDF opens at the top of its first page, centred, rather than at the middle of the whole stack.
+	// A canvas reopens where it was last viewed; a PDF seen for the first time opens at the top of its first page, centred.
 	const first = (scene.elements as ExcalidrawElement[]).find(pageOf);
-	const start = first ? { scrollX: width / 2 - (first.x + first.width / 2), scrollY: 80 - first.y } : {};
+	const view = lastView(item.id);
+	const start = view ? { scrollX: view.scrollX, scrollY: view.scrollY, zoom: { value: view.zoom as NormalizedZoomValue } } : first ? { scrollX: width / 2 - (first.x + first.width / 2), scrollY: 80 - first.y } : {};
 	return (
-		<Excalidraw
-			excalidrawAPI={instance => {
-				apiRef.current = instance;
-				setApi(instance);
-				if (import.meta.env.DEV) Object.assign(window, { excalidraw: instance });
-			}}
-			// Same grey as the empty canvas area; white PDF pages stand out on it.
-			initialData={{ elements: scene.elements as ExcalidrawElement[], files: Object.fromEntries(initialFiles.current.map(file => [file.id, file])), appState: { viewBackgroundColor: '#eeeded', ...start }, scrollToContent: !first }}
-			onChange={onChange}
-			langCode="id-ID"
-			renderTopRightUI={() => (
-				<div className="flex items-center gap-2">
-					{status && <span className="max-w-64 truncate text-xs text-ink-muted">{status}</span>}
-					<button onClick={explainSelection} disabled={busy} className="rounded-lg bg-ink px-3.5 py-2 text-sm font-medium text-paper transition-colors duration-150 hover:bg-ink/85 disabled:opacity-50" title="Kotakin bagian halaman, pilih kotaknya, lalu klik">
-						{busy ? '…' : 'Jelaskan'}
-					</button>
-				</div>
-			)}
-		/>
+		// The sheet sits beside the canvas, not over it, so the notes on the right stay visible.
+		<div className="flex h-full">
+			<div ref={area} className="relative min-w-0 flex-1 overflow-hidden">
+				<Excalidraw
+					excalidrawAPI={instance => {
+						apiRef.current = instance;
+						setApi(instance);
+						if (import.meta.env.DEV) Object.assign(window, { excalidraw: instance });
+					}}
+					// Same grey as the empty canvas area; white PDF pages stand out on it.
+					initialData={{ elements: scene.elements as ExcalidrawElement[], files: Object.fromEntries(initialFiles.current.map(file => [file.id, file])), appState: { viewBackgroundColor: '#eeeded', ...start }, scrollToContent: !first && !view }}
+					onChange={onChange}
+					onScrollChange={(scrollX, scrollY, zoom) => {
+						try {
+							localStorage.setItem(viewKey(item.id), JSON.stringify({ scrollX, scrollY, zoom: zoom.value }));
+						} catch {} // private mode / storage full: just reopen at the top
+					}}
+					renderTopRightUI={() => (
+						<div className="flex items-center gap-2">
+							{status && <span className="max-w-64 truncate text-xs text-ink-muted">{status}</span>}
+							<button onClick={explainSelection} disabled={busy} className="rounded-lg bg-ink px-3.5 py-2 text-sm font-medium text-paper transition-colors duration-150 hover:bg-ink/85 disabled:opacity-50" title="Kotakin bagian halaman, pilih kotaknya, lalu klik">
+								{busy ? '…' : 'Jelaskan'}
+							</button>
+						</div>
+					)}
+				/>
+				{api && <NoteButton api={api} area={area} onOpen={setSheet} />}
+			</div>
+			{api && sheet && <ExplainSheet key={sheet} api={api} noteId={sheet} onClose={() => setSheet(null)} />}
+		</div>
 	);
 }

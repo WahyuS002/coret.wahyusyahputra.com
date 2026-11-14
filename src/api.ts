@@ -15,4 +15,8 @@ export const saveItem = (item: Item) => call(`items/${item.id}`, put(item));
 export const loadScene = (id: string) => call<Scene | null>(`canvas/${id}`);
 export const saveScene = (id: string, scene: Scene) => call(`canvas/${id}`, put(scene));
 export const uploadFile = (blob: Blob) => call<{ key: string }>('files', { method: 'POST', headers: { 'content-type': blob.type }, body: blob }).then(r => r.key);
-export const explain = (image: string) => call<{ text: string }>('explain', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ image }) }).then(r => r.text);
+/** One question and its answer about a mark; the first answer explains the mark and has no question. */
+export type Turn = { q: string | null; a: string };
+/** Explains the red box in `image`; with the conversation so far and a new `question`, answers that instead. */
+export const explain = (image: string, turns?: Turn[], question?: string) =>
+	call<{ text: string }>('explain', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ image, turns, question }) }).then(r => r.text);
