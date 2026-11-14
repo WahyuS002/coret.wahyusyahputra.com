@@ -1,12 +1,26 @@
-import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements, getSceneVersion } from '@excalidraw/excalidraw';
+import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements, getSceneVersion, restoreElements } from '@excalidraw/excalidraw';
 import type { ExcalidrawElement, ExcalidrawImageElement, FileId } from '@excalidraw/excalidraw/element/types';
-import type { BinaryFileData, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
+import type { BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
 import { useEffect, useRef, useState } from 'react';
 import { explain, loadScene, saveScene, uploadFile, type Item, type Scene } from './api.ts';
 import { overlap, wrap, type Box } from './geometry.ts';
-import { renderPage } from './pdf.ts';
+import { pageElements, renderPage } from './pdf.ts';
 
 type PageData = { pdf: string; page: number };
+
+// The first pages of every PDF opened, so switching back to one shows it at once.
+// ponytail: two rendered pages (~0.5 MB) per PDF stay in memory for the tab's life; bound it if people open hundreds
+const firstPages = new Map<string, Promise<BinaryFileData>>();
+const firstPage = ({ fileId, customData }: ExcalidrawImageElement) => {
+	const id = fileId as FileId;
+	if (!firstPages.has(id)) {
+		const { pdf, page } = customData as PageData;
+		const rendered = renderPage(pdf, page).then(dataURL => ({ id, dataURL: dataURL as BinaryFileData['dataURL'], mimeType: 'image/jpeg' as const, created: Date.now() }));
+		rendered.catch(() => firstPages.delete(id));
+		firstPages.set(id, rendered);
+	}
+	return firstPages.get(id)!;
+};
 
 const pageOf = (element: ExcalidrawElement) => element.customData as PageData | undefined;
 const toDataURL = (blob: Blob) =>
@@ -55,19 +69,29 @@ export function Canvas({ item }: { item: Item }) {
 	const images = useRef<Record<string, string>>({});
 	const requested = useRef(new Set<string>());
 	const savedVersion = useRef(-1);
+	// What to save. Excalidraw empties its scene on unmount, before the save on unmount runs, so the API can't be asked then.
+	const initialFiles = useRef<BinaryFileData[]>([]);
+	const latest = useRef<{ elements: readonly ExcalidrawElement[]; files: BinaryFiles }>({ elements: [], files: {} });
 	const timer = useRef<number | undefined>(undefined);
 	const queue = useRef(Promise.resolve());
 	const container = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
-		loadScene(item.id).then(
-			loaded => {
+		loadScene(item.id)
+			.then(async loaded => {
+				let elements = loaded?.elements ?? [];
+				// Pages lost to an old save bug (canvas switched within a second of opening) come back from the PDF.
+				if (item.pdf && !elements.some(element => pageOf(element as ExcalidrawElement))) elements = [...(await pageElements(item.pdf)), ...elements];
+				// Pages in the first screen are drawn before the canvas shows, so it doesn't appear empty and fill in a moment later.
+				const pages = (elements as ExcalidrawElement[]).filter((element): element is ExcalidrawImageElement => element.type === 'image' && !!pageOf(element)).slice(0, 2);
+				initialFiles.current = await Promise.all(pages.map(firstPage)).catch(() => []);
+				for (const file of initialFiles.current) requested.current.add(file.id);
+				if (elements === loaded?.elements) savedVersion.current = getSceneVersion(elements as ExcalidrawElement[]); // opening isn't a change to save
 				images.current = { ...loaded?.images };
-				setScene(loaded ?? { elements: [], images: {} });
+				setScene({ elements, images: images.current });
 				setWidth(container.current?.clientWidth ?? 0);
-			},
-			error => setStatus(`Gagal membuka: ${error.message}`),
-		);
+			})
+			.catch(error => setStatus(`Gagal membuka: ${error.message}`));
 	}, [item.id]);
 
 	// Uploaded images come back from R2.
@@ -103,10 +127,7 @@ export function Canvas({ item }: { item: Item }) {
 
 	// save() and flush() read refs only, so the unmount handler below (registered once) never sees stale state.
 	async function save() {
-		const api = apiRef.current;
-		if (!api) return;
-		const files = api.getFiles();
-		const elements = api.getSceneElements();
+		const { elements, files } = latest.current;
 		for (const element of elements) {
 			if (element.type !== 'image' || !element.fileId || pageOf(element) || images.current[element.fileId] || !files[element.fileId]) continue;
 			try {
@@ -128,7 +149,8 @@ export function Canvas({ item }: { item: Item }) {
 		);
 	}
 
-	function onChange(elements: readonly ExcalidrawElement[]) {
+	function onChange(elements: readonly ExcalidrawElement[], _: unknown, files: BinaryFiles) {
+		latest.current = { elements, files };
 		showPages();
 		const version = getSceneVersion(elements);
 		if (version === savedVersion.current) return;
@@ -182,10 +204,11 @@ export function Canvas({ item }: { item: Item }) {
 
 			const id = crypto.randomUUID();
 			const start = { x: box.x + box.width, y: box.y + box.height / 2 };
-			const added = convertToExcalidrawElements([
+			// restoreElements moves the arrow's first point to 0,0 as Excalidraw expects; left as converted, dragging the note flings the arrow off-canvas
+			const added = restoreElements(convertToExcalidrawElements([
 				{ type: 'rectangle', id, x, y, roundness: { type: 3 }, label: { text, fontSize: 20, textAlign: 'left' } },
 				{ type: 'arrow', ...start, width: x - start.x, height: y + height / 2 - start.y, strokeColor: '#4a8fd6', end: { id } },
-			]);
+			]), null);
 			api.updateScene({ elements: [...api.getSceneElementsIncludingDeleted(), ...added], captureUpdate: CaptureUpdateAction.IMMEDIATELY });
 			setStatus('');
 		} catch (error) {
@@ -197,8 +220,9 @@ export function Canvas({ item }: { item: Item }) {
 
 	if (!scene)
 		return (
-			<div ref={container} className="h-full p-6 text-sm text-ink-muted">
-				{status || 'Memuat…'}
+			// Same grey as the canvas, so switching shows one change instead of a flash; the text only appears if loading is slow.
+			<div ref={container} className="h-full bg-canvas p-6 text-sm text-ink-muted">
+				{status || <span className="appear-late">Memuat…</span>}
 			</div>
 		);
 	// A PDF opens at the top of its first page, centred, rather than at the middle of the whole stack.
@@ -212,7 +236,7 @@ export function Canvas({ item }: { item: Item }) {
 				if (import.meta.env.DEV) Object.assign(window, { excalidraw: instance });
 			}}
 			// Same grey as the empty canvas area; white PDF pages stand out on it.
-			initialData={{ elements: scene.elements as ExcalidrawElement[], appState: { viewBackgroundColor: '#eeeded', ...start }, scrollToContent: !first }}
+			initialData={{ elements: scene.elements as ExcalidrawElement[], files: Object.fromEntries(initialFiles.current.map(file => [file.id, file])), appState: { viewBackgroundColor: '#eeeded', ...start }, scrollToContent: !first }}
 			onChange={onChange}
 			langCode="id-ID"
 			renderTopRightUI={() => (

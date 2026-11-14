@@ -1,9 +1,7 @@
-import { convertToExcalidrawElements } from '@excalidraw/excalidraw';
-import type { FileId } from '@excalidraw/excalidraw/element/types';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { listItems, saveItem, saveScene, uploadFile, type Item } from './api.ts';
 import { Canvas } from './Canvas.tsx';
-import { PAGE_GAP, PAGE_WIDTH, pageHeights } from './pdf.ts';
+import { pageElements } from './pdf.ts';
 
 const newItem = (name: string, kind: Item['kind'], parentId: string | null, pdf: string | null = null): Item => ({
 	id: crypto.randomUUID(),
@@ -14,18 +12,10 @@ const newItem = (name: string, kind: Item['kind'], parentId: string | null, pdf:
 	updated: new Date().toISOString(),
 });
 
-/** Uploads the PDF and makes a canvas with every page stacked top to bottom, locked so drawing never drags a page. */
+/** Uploads the PDF and makes a canvas of its pages. */
 async function importPdf(file: File, parentId: string | null): Promise<Item> {
-	const heights = await pageHeights(file);
 	const key = await uploadFile(file);
-	let y = 0;
-	const elements = convertToExcalidrawElements(
-		heights.map((height, index) => {
-			const page = { type: 'image' as const, x: 0, y, width: PAGE_WIDTH, height, fileId: `pdf:${key}:${index + 1}` as FileId, status: 'saved' as const, locked: true, customData: { pdf: key, page: index + 1 } };
-			y += height + PAGE_GAP;
-			return page;
-		}),
-	);
+	const elements = await pageElements(key, file); // ponytail: a PDF that won't parse is left in R2 unreferenced; parse before upload if that ever matters
 	const item = newItem(file.name.replace(/\.pdf$/i, ''), 'canvas', parentId, key);
 	await saveScene(item.id, { elements, images: {} });
 	await saveItem(item);
@@ -67,24 +57,31 @@ type TreeProps = {
 	onFolder: (id: string) => void;
 	onRename: (item: Item) => void;
 	onDelete: (item: Item) => void;
+	dragOver: string | null | undefined;
+	drop: (parentId: string | null) => DropHandlers;
 };
+
+type DropHandlers = { onDragOver: (event: DragEvent) => void; onDragLeave: (event: DragEvent) => void; onDrop: (event: DragEvent) => void };
+const DRAG = 'application/x-coret-item';
 
 const action = 'grid size-6 place-items-center rounded text-ink-faint transition-colors duration-150 hover:bg-black/[0.06] hover:text-ink';
 
 function Tree(props: TreeProps) {
-	const { items, parentId, openId, folderId, expanded, onOpen, onFolder, onRename, onDelete } = props;
+	const { items, parentId, openId, folderId, expanded, onOpen, onFolder, onRename, onDelete, dragOver, drop } = props;
 	const children = items.filter(item => item.parentId === parentId).sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'folder' ? -1 : 1));
+	if (!children.length) return null;
 	return (
 		<ul className={parentId ? 'ml-[15px] border-l border-line pl-1.5' : ''}>
 			{children.map(item => (
 				<li key={item.id}>
-					<div className="group relative">
+					{/* dropping on a canvas row puts the item next to it, i.e. in the same folder */}
+					<div className="group relative" draggable onDragStart={event => event.dataTransfer.setData(DRAG, item.id)} {...drop(item.kind === 'folder' ? item.id : item.parentId)}>
 						{item.kind === 'folder' ? (
 							<button
 								onClick={() => onFolder(item.id)}
 								aria-expanded={expanded.has(item.id)}
 								title={folderId === item.id ? 'Item baru masuk ke folder ini' : undefined}
-								className={`${row} group-hover:pr-16 group-focus-within:pr-16 ${folderId === item.id ? 'bg-active text-ink' : 'text-ink-muted hover:bg-black/[0.04] hover:text-ink'}`}
+								className={`${row} group-hover:pr-16 group-focus-within:pr-16 ${dragOver === item.id ? 'bg-accent-soft text-ink ring-1 ring-accent' : 'text-ink-muted hover:bg-black/[0.04] hover:text-ink'}`}
 							>
 								<Icon name="chevron" className={`size-3.5 text-ink-faint transition-transform duration-150 ${expanded.has(item.id) ? 'rotate-90' : ''}`} />
 								<Icon name="folder" className={`size-4 ${folderId === item.id ? 'text-accent' : 'text-ink-faint'}`} />
@@ -112,19 +109,36 @@ function Tree(props: TreeProps) {
 	);
 }
 
-function EmptyState({ onPdf, onCanvas }: { onPdf: () => void; onCanvas: () => void }) {
+/** A dashed sheet in the shape of the PDF page that will open here; drop a PDF on the area or click the sheet. */
+function EmptyState({ onPdf, onFiles, onCanvas }: { onPdf: () => void; onFiles: (files: File[]) => void; onCanvas: () => void }) {
+	const [over, setOver] = useState(false);
 	return (
-		<div className="dot-grid grid h-full place-items-center p-8">
-			<div className="flex gap-2">
-				<button onClick={onPdf} className="flex h-10 items-center gap-2 rounded-lg bg-ink px-4 font-medium text-paper shadow-[0_1px_2px_rgb(0_0_0/0.12),0_4px_12px_-4px_rgb(0_0_0/0.2)] transition-colors duration-150 hover:bg-ink/85">
-					<Icon name="pdfUp" />
-					Impor PDF
-				</button>
-				<button onClick={onCanvas} className="flex h-10 items-center gap-2 rounded-lg bg-paper px-4 font-medium text-ink ring-1 ring-line-strong transition-colors duration-150 hover:bg-shell">
-					<Icon name="pen" />
-					Canvas kosong
-				</button>
-			</div>
+		<div
+			className="dot-grid flex h-full flex-col items-center justify-center gap-4 p-8"
+			onDragOver={event => {
+				event.preventDefault();
+				setOver(true);
+			}}
+			onDragLeave={event => {
+				if (!event.currentTarget.contains(event.relatedTarget as Node)) setOver(false);
+			}}
+			onDrop={event => {
+				event.preventDefault();
+				setOver(false);
+				onFiles([...event.dataTransfer.files]);
+			}}
+		>
+			<button
+				onClick={onPdf}
+				className={`group flex aspect-[1/1.414] w-60 flex-col items-center justify-center gap-4 rounded-md border-2 border-dashed px-6 text-center transition-colors duration-150 ${over ? 'border-accent bg-accent-soft' : 'border-line-strong bg-paper/70 hover:border-accent/60 hover:bg-paper'}`}
+			>
+				<Icon name="pdfUp" className={`size-7 transition-colors duration-150 ${over ? 'text-accent' : 'text-ink-faint group-hover:text-accent'}`} />
+				<span className="text-[15px] leading-snug text-ink-muted">{over ? 'Lepas untuk mengimpor' : 'Tarik PDF ke sini untuk mulai mencoret'}</span>
+				<span className="flex h-8 items-center rounded-md bg-ink px-3 font-medium text-paper transition-colors duration-150 group-hover:bg-ink/85">Pilih PDF</span>
+			</button>
+			<button onClick={onCanvas} className="rounded text-ink-muted underline decoration-line-strong underline-offset-4 transition-colors duration-150 hover:text-ink hover:decoration-ink">
+				atau buka canvas kosong
+			</button>
 		</div>
 	);
 }
@@ -138,7 +152,16 @@ export function App() {
 	const pdfInput = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
-		listItems().then(setItems, error => setStatus(`Gagal memuat: ${error.message}`));
+		listItems().then(
+			items => {
+				setItems(items);
+				// After a refresh, open the folders down to the canvas in the URL so it shows in the tree.
+				const open = new Set<string>();
+				for (let at = items.find(item => item.id === openId)?.parentId; at && !open.has(at); at = items.find(item => item.id === at)?.parentId) open.add(at);
+				setExpanded(open);
+			},
+			error => setStatus(`Gagal memuat: ${error.message}`),
+		);
 	}, []);
 
 	function open(id: string) {
@@ -146,11 +169,14 @@ export function App() {
 		history.replaceState(null, '', `?c=${id}`);
 	}
 
+	/** Opening a folder makes it the target for new items; closing it hands the target back to its parent. */
 	function toggleFolder(id: string) {
-		setFolderId(id);
+		const closing = expanded.has(id);
+		setFolderId(closing ? (items.find(item => item.id === id)?.parentId ?? null) : id);
 		setExpanded(previous => {
 			const next = new Set(previous);
-			if (!next.delete(id)) next.add(id);
+			if (closing) next.delete(id);
+			else next.add(id);
 			return next;
 		});
 	}
@@ -165,10 +191,46 @@ export function App() {
 				if (item.parentId) setExpanded(previous => new Set(previous).add(item.parentId!));
 			}
 			setStatus('');
+			return true;
 		} catch (error) {
 			setStatus(`Gagal: ${(error as Error).message}`);
+			return false;
 		}
 	}
+
+	/** One at a time so the status shows which file is going; stops at the first failure so its error stays visible. */
+	async function importFiles(files: File[], parentId: string | null) {
+		const pdfs = files.filter(file => file.type === 'application/pdf');
+		for (const [index, file] of pdfs.entries()) if (!(await run(`Mengimpor ${pdfs.length > 1 ? `${index + 1}/${pdfs.length} ` : ''}${file.name}…`, () => importPdf(file, parentId)))) return;
+	}
+
+	function move(id: string, parentId: string | null) {
+		const item = items.find(other => other.id === id);
+		if (!item || item.parentId === parentId) return;
+		for (let at = parentId; at; at = items.find(other => other.id === at)?.parentId ?? null) if (at === id) return; // a folder can't go inside itself
+		if (parentId) setExpanded(previous => new Set(previous).add(parentId));
+		apply('Memindahkan…', [{ ...item, parentId, updated: new Date().toISOString() }]);
+	}
+
+	const [dragOver, setDragOver] = useState<string | null>(); // folder under the cursor while dragging; null = root
+	const drop = (parentId: string | null): DropHandlers => ({
+		onDragOver: event => {
+			event.preventDefault();
+			event.stopPropagation();
+			setDragOver(parentId);
+		},
+		onDragLeave: event => {
+			if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOver(undefined);
+		},
+		onDrop: event => {
+			event.preventDefault();
+			event.stopPropagation();
+			setDragOver(undefined);
+			const id = event.dataTransfer.getData(DRAG);
+			if (id) move(id, parentId);
+			else importFiles([...event.dataTransfer.files], parentId);
+		},
+	});
 
 	function create(kind: Item['kind']) {
 		const name = prompt(kind === 'folder' ? 'Nama folder' : 'Nama canvas')?.trim();
@@ -219,7 +281,6 @@ export function App() {
 	}
 
 	const current = items.find(item => item.id === openId);
-	const folder = items.find(item => item.id === folderId);
 
 	const failed = status.startsWith('Gagal');
 	const iconButton = 'grid size-8 place-items-center rounded-md text-ink-muted transition-colors duration-150 hover:bg-black/[0.05] hover:text-ink';
@@ -237,25 +298,19 @@ export function App() {
 							ref={pdfInput}
 							type="file"
 							accept="application/pdf"
+							multiple
 							hidden
 							onChange={event => {
-								const file = event.target.files?.[0];
+								const files = [...(event.target.files ?? [])];
 								event.target.value = '';
-								if (file) run(`Mengimpor ${file.name}…`, () => importPdf(file, folderId));
+								importFiles(files, folderId);
 							}}
 						/>
 					</div>
 				</header>
-				{folder && (
-					<div className="mx-3 mb-1 flex items-center gap-1.5 py-1 pl-1 text-xs text-ink-muted" title="Item baru masuk ke folder ini">
-						<Icon name="folder" className="size-3.5 text-accent" />
-						<span className="min-w-0 truncate font-medium text-ink">{folder.name}</span>
-						<button onClick={() => setFolderId(null)} className="ml-auto grid size-5 shrink-0 place-items-center rounded text-ink-faint hover:bg-black/[0.05] hover:text-ink" title="Simpan ke akar" aria-label="Simpan ke akar"><Icon name="x" className="size-3.5" /></button>
-					</div>
-				)}
-				<nav className="thin-scroll flex-1 overflow-y-auto px-2 pb-3">
+				<nav className={`thin-scroll flex-1 overflow-y-auto px-2 pb-3 transition-colors duration-150 ${dragOver === null ? 'bg-accent-soft/50' : ''}`} {...drop(null)}>
 					{items.length ? (
-						<Tree items={items} parentId={null} openId={openId} folderId={folderId} expanded={expanded} onOpen={open} onFolder={toggleFolder} onRename={rename} onDelete={remove} />
+						<Tree items={items} parentId={null} openId={openId} folderId={folderId} expanded={expanded} onOpen={open} onFolder={toggleFolder} onRename={rename} onDelete={remove} dragOver={dragOver} drop={drop} />
 					) : (
 						!status && <p className="px-2 py-1 text-xs text-ink-faint">Belum ada apa-apa di sini.</p>
 					)}
@@ -271,7 +326,7 @@ export function App() {
 				{current?.kind === 'canvas' ? (
 					<Canvas key={current.id} item={current} />
 				) : (
-					<EmptyState onPdf={() => pdfInput.current?.click()} onCanvas={() => create('canvas')} />
+					<EmptyState onPdf={() => pdfInput.current?.click()} onFiles={files => importFiles(files, folderId)} onCanvas={() => create('canvas')} />
 				)}
 			</main>
 		</div>

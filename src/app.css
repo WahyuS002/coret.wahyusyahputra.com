@@ -67,3 +67,20 @@ body {
 	background-image: radial-gradient(circle, rgb(0 0 0 / 0.13) 1px, transparent 1px);
 	background-size: 22px 22px;
 }
+
+/* Excalidraw's own loading screen, which flashes for a frame on every canvas switch, becomes plain canvas grey. */
+.LoadingMessage.LoadingMessage {
+	background: var(--color-canvas);
+}
+.LoadingMessage.LoadingMessage > * {
+	visibility: hidden;
+}
+
+.appear-late {
+	animation: appear 150ms 500ms both;
+}
+@keyframes appear {
+	from {
+		opacity: 0;
+	}
+}

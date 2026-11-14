@@ -1,3 +1,5 @@
+import { convertToExcalidrawElements } from '@excalidraw/excalidraw';
+import type { FileId } from '@excalidraw/excalidraw/element/types';
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import worker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
@@ -12,17 +14,22 @@ const open = (key: string) => {
 	return opened.get(key)!;
 };
 
-/** Height of every page once scaled to PAGE_WIDTH, read from a local file before it is uploaded. */
-export async function pageHeights(file: File): Promise<number[]> {
-	const task = getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
-	const pdf = await task.promise;
-	const heights: number[] = [];
+/**
+ * Every page of the PDF in R2 at `key`, stacked top to bottom at PAGE_WIDTH and locked so drawing never drags a page.
+ * Pass the local `file` right after uploading it so it isn't downloaded back.
+ */
+export async function pageElements(key: string, file?: File) {
+	if (file) opened.set(key, getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise);
+	const pdf = await open(key);
+	let y = 0;
+	const pages = [];
 	for (let n = 1; n <= pdf.numPages; n++) {
 		const { width, height } = (await pdf.getPage(n)).getViewport({ scale: 1 });
-		heights.push((height / width) * PAGE_WIDTH);
+		const scaled = (height / width) * PAGE_WIDTH;
+		pages.push({ type: 'image' as const, x: 0, y, width: PAGE_WIDTH, height: scaled, fileId: `pdf:${key}:${n}` as FileId, status: 'saved' as const, locked: true, customData: { pdf: key, page: n } });
+		y += scaled + PAGE_GAP;
 	}
-	await task.destroy();
-	return heights;
+	return convertToExcalidrawElements(pages);
 }
 
 /** One page as a JPEG data URL, at twice PAGE_WIDTH so it stays sharp when zoomed in. */
