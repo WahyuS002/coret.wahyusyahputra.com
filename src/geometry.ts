@@ -4,6 +4,13 @@ export type Box = { x: number; y: number; width: number; height: number };
 export const overlap = (a: Box, b: Box) =>
 	Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
 
+/** The smallest box around all of `boxes`. */
+export function bounds(boxes: readonly Box[]): Box {
+	const x = Math.min(...boxes.map(box => box.x));
+	const y = Math.min(...boxes.map(box => box.y));
+	return { x, y, width: Math.max(...boxes.map(box => box.x + box.width)) - x, height: Math.max(...boxes.map(box => box.y + box.height)) - y };
+}
+
 /** Breaks a gloss into lines, since a labelled box grows to fit its text instead of wrapping it. */
 export function wrap(text: string, width = 30): string {
 	const lines: string[] = [];

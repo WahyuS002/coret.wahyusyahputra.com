@@ -14,8 +14,26 @@
 	--color-canvas: #eeeded;
 	--color-active: #e5e5e3;
 	--color-paper: #fdfcfb;
+	--color-tint: #000; /* hover washes: black on light, white on dark */
 	--font-sans: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
 	--font-heading: 'Instrument Sans', 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Dark mode, toggled from the sidebar. The canvas stays light: Excalidraw's dark theme inverts strokes but not PDF pages, so black marks would turn pale on white pages. */
+.dark {
+	color-scheme: dark;
+	--color-accent: #4c95ff;
+	--color-accent-soft: #1c2b42;
+	--color-danger: #f2766b;
+	--color-ink: #e8e7e4;
+	--color-ink-muted: #a3a2a8;
+	--color-ink-faint: #75736d;
+	--color-line: rgb(255 255 255 / 0.08);
+	--color-line-strong: rgb(255 255 255 / 0.14);
+	--color-shell: #1a1a1a;
+	--color-active: #2d2d2d;
+	--color-paper: #252525;
+	--color-tint: #fff;
 }
 
 /* Excalidraw's violet becomes the same blue, and its UI uses the same type. */

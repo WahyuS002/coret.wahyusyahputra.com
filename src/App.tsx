@@ -42,7 +42,7 @@ type TreeProps = {
 type DropHandlers = { onDragOver: (event: DragEvent) => void; onDragLeave: (event: DragEvent) => void; onDrop: (event: DragEvent) => void };
 const DRAG = 'application/x-coret-item';
 
-const action = 'grid size-6 place-items-center rounded text-ink-faint transition-colors duration-150 hover:bg-black/[0.06] hover:text-ink';
+const action = 'grid size-6 place-items-center rounded text-ink-faint transition-colors duration-150 hover:bg-tint/[0.06] hover:text-ink';
 
 function Tree(props: TreeProps) {
 	const { items, parentId, openId, folderId, expanded, onOpen, onFolder, onRename, onDelete, dragOver, drop } = props;
@@ -59,7 +59,7 @@ function Tree(props: TreeProps) {
 								onClick={() => onFolder(item.id)}
 								aria-expanded={expanded.has(item.id)}
 								title={folderId === item.id ? 'Item baru masuk ke folder ini' : undefined}
-								className={`${row} group-hover:pr-16 group-focus-within:pr-16 ${dragOver === item.id ? 'bg-accent-soft text-ink ring-1 ring-accent' : 'text-ink-muted hover:bg-black/[0.04] hover:text-ink'}`}
+								className={`${row} group-hover:pr-16 group-focus-within:pr-16 ${dragOver === item.id ? 'bg-accent-soft text-ink ring-1 ring-accent' : 'text-ink-muted hover:bg-tint/[0.04] hover:text-ink'}`}
 							>
 								<Icon name="chevron" className={`size-3.5 text-ink-faint transition-transform duration-150 ${expanded.has(item.id) ? 'rotate-90' : ''}`} />
 								<Icon name="folder" className={`size-4 ${folderId === item.id ? 'text-accent' : 'text-ink-faint'}`} />
@@ -69,7 +69,7 @@ function Tree(props: TreeProps) {
 							<button
 								onClick={() => onOpen(item.id)}
 								aria-current={openId === item.id ? 'page' : undefined}
-								className={`${row} pl-[30px] group-hover:pr-16 group-focus-within:pr-16 ${openId === item.id ? 'bg-active text-ink' : 'text-ink-muted hover:bg-black/[0.04] hover:text-ink'}`}
+								className={`${row} pl-[30px] group-hover:pr-16 group-focus-within:pr-16 ${openId === item.id ? 'bg-active text-ink' : 'text-ink-muted hover:bg-tint/[0.04] hover:text-ink'}`}
 							>
 								<Icon name={item.pdf ? 'pdf' : 'pen'} className={`size-4 ${openId === item.id ? 'text-ink' : 'text-ink-faint'}`} />
 								<span className="truncate">{item.name}</span>
@@ -260,8 +260,17 @@ export function App() {
 
 	const current = items.find(item => item.id === openId);
 
+	// Light by default; index.html applies a saved dark choice before first paint.
+	const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+	useEffect(() => {
+		document.documentElement.classList.toggle('dark', dark);
+		try {
+			localStorage.setItem('coret:theme', dark ? 'dark' : 'light');
+		} catch {} // private mode: the choice just isn't remembered
+	}, [dark]);
+
 	const failed = status.startsWith('Gagal');
-	const iconButton = 'grid size-8 place-items-center rounded-md text-ink-muted transition-colors duration-150 hover:bg-black/[0.05] hover:text-ink';
+	const iconButton = 'grid size-8 place-items-center rounded-md text-ink-muted transition-colors duration-150 hover:bg-tint/[0.05] hover:text-ink';
 
 	return (
 		<div className="flex h-full text-sm">
@@ -272,6 +281,7 @@ export function App() {
 						<button onClick={() => create('folder')} className={iconButton} title="Folder baru" aria-label="Folder baru"><Icon name="folderPlus" /></button>
 						<button onClick={() => create('canvas')} className={iconButton} title="Canvas baru" aria-label="Canvas baru"><Icon name="penPlus" /></button>
 						<button onClick={() => pdfInput.current?.click()} className={iconButton} title="Impor PDF" aria-label="Impor PDF"><Icon name="pdfUp" /></button>
+						<button onClick={() => setDark(!dark)} className={iconButton} title={dark ? 'Mode terang' : 'Mode gelap'} aria-label={dark ? 'Ganti ke mode terang' : 'Ganti ke mode gelap'}><Icon name={dark ? 'sun' : 'moon'} /></button>
 						<input
 							ref={pdfInput}
 							type="file"

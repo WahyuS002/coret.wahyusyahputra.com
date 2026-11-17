@@ -4,7 +4,7 @@ import type { BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI, NormalizedZo
 import { useEffect, useRef, useState } from 'react';
 import { explain, loadScene, saveScene, uploadFile, type Item, type Scene } from './api.ts';
 import { followOwners, type Part } from './explanations.ts';
-import { overlap, wrap } from './geometry.ts';
+import { bounds, overlap, wrap } from './geometry.ts';
 import { cropMark, pageOf, pageUnder, type PageData } from './crop.ts';
 import { ExplainSheet, NoteButton } from './ExplainSheet.tsx';
 import { pageElements, renderPage } from './pdf.ts';
@@ -174,7 +174,8 @@ export function Canvas({ item }: { item: Item }) {
 		const elements: readonly ExcalidrawElement[] = api.getSceneElements();
 		const { selectedElementIds } = api.getAppState();
 		const selected = elements.filter(element => selectedElementIds[element.id]);
-		if (selected.length !== 1) return setStatus('Pilih satu kotak dulu');
+		if (!selected.length) return setStatus('Pilih kotaknya dulu');
+		// Several boxes (Shift+klik) mark one phrase that wraps across lines; the first one owns the note and anchors the arrow.
 		const [box] = selected;
 		const target = pageUnder(api, box);
 		if (!target) return setStatus('Kotaknya harus di atas halaman atau gambar');
@@ -182,13 +183,14 @@ export function Canvas({ item }: { item: Item }) {
 		setBusy(true);
 		setStatus('Bertanya ke DeepSeek…');
 		try {
-			const answer = await explain(await cropMark(api, box, target));
+			const answer = await explain(await cropMark(api, selected, target));
 			const text = wrap(answer);
 
 			// Next to the page, level with the mark, moved down past any note already there.
 			const x = target.x + target.width + 80;
 			const height = text.split('\n').length * 25 + 30;
-			let y = box.y + box.height / 2 - height / 2;
+			const all = bounds(selected);
+			let y = all.y + all.height / 2 - height / 2;
 			for (;;) {
 				const hit = api.getSceneElements().filter(element => overlap(element, { x, y, width: 320, height }) > 0);
 				if (!hit.length) break;
@@ -202,7 +204,7 @@ export function Canvas({ item }: { item: Item }) {
 			const bindable = ['rectangle', 'ellipse', 'diamond'].includes(box.type);
 			const added = restoreElements(
 				convertToExcalidrawElements([
-					{ type: 'rectangle', id, x, y, roundness: { type: 3 }, label: { text, fontSize: 20, textAlign: 'left' }, customData: { owner: box.id, turns: [{ q: null, a: answer }] } },
+					{ type: 'rectangle', id, x, y, roundness: { type: 3 }, label: { text, fontSize: 20, textAlign: 'left' }, customData: { owner: box.id, marks: selected.map(element => element.id), turns: [{ q: null, a: answer }] } },
 					{ type: 'arrow', id: arrowId, ...start, width: x - start.x, height: y + height / 2 - start.y, strokeColor: '#4a8fd6', opacity: 40, end: { id }, customData: { owner: id } },
 				], { regenerateIds: false }), // keep our ids: customData.owner and the start binding point at them
 				null,
@@ -211,8 +213,14 @@ export function Canvas({ item }: { item: Item }) {
 				: element.id === arrowId && bindable ? { ...element, startBinding: { elementId: box.id, focus: 0, gap: 1 } } // arrow follows the mark when it moves
 				: element,
 			);
-			const mark = bindable ? newElementWith(box, { boundElements: [...(box.boundElements ?? []), { type: 'arrow', id: arrowId }] }) : box;
-			api.updateScene({ elements: [...api.getSceneElementsIncludingDeleted().map(element => (element.id === box.id ? mark : element)), ...added], captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+			// Group the boxes so they move and delete together, unless they already share a group.
+			const group = crypto.randomUUID();
+			const grouped = new Map<string, ExcalidrawElement>(
+				selected.length > 1 && !box.groupIds.some(id => selected.every(element => element.groupIds.includes(id))) ? selected.map(element => [element.id, newElementWith(element, { groupIds: [...element.groupIds, group] })]) : [],
+			);
+			const first = grouped.get(box.id) ?? box;
+			const mark = bindable ? newElementWith(first, { boundElements: [...(first.boundElements ?? []), { type: 'arrow', id: arrowId }] }) : first;
+			api.updateScene({ elements: [...api.getSceneElementsIncludingDeleted().map(element => (element.id === box.id ? mark : (grouped.get(element.id) ?? element))), ...added], captureUpdate: CaptureUpdateAction.IMMEDIATELY });
 			setStatus('');
 		} catch (error) {
 			setStatus(`Gagal: ${(error as Error).message}`);
@@ -253,7 +261,7 @@ export function Canvas({ item }: { item: Item }) {
 					renderTopRightUI={() => (
 						<div className="flex items-center gap-2">
 							{status && <span className="max-w-64 truncate text-xs text-ink-muted">{status}</span>}
-							<button onClick={explainSelection} disabled={busy} className="rounded-lg bg-ink px-3.5 py-2 text-sm font-medium text-paper transition-colors duration-150 hover:bg-ink/85 disabled:opacity-50" title="Kotakin bagian halaman, pilih kotaknya, lalu klik">
+							<button onClick={explainSelection} disabled={busy} className="rounded-lg bg-ink px-3.5 py-2 text-sm font-medium text-paper transition-colors duration-150 hover:bg-ink/85 disabled:opacity-50" title="Kotakin bagian halaman, pilih kotaknya (Shift+klik untuk beberapa baris), lalu klik">
 								{busy ? '…' : 'Jelaskan'}
 							</button>
 						</div>

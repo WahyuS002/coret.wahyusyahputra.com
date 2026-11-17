@@ -139,11 +139,14 @@ export function ExplainSheet({ api, noteId, onClose }: { api: Api; noteId: strin
 
 	// The same crop the first answer was given, cut again from the mark, so follow-ups see the page too.
 	useEffect(() => {
-		const mark = find(api, find(api, noteId)?.customData?.owner as string | undefined);
+		const note = find(api, noteId);
+		const mark = find(api, note?.customData?.owner as string | undefined);
 		const target = mark && !mark.isDeleted ? pageUnder(api, mark) : undefined;
 		if (!mark || !target) return setError('Kotak tandanya tidak ada di atas halaman, jadi tidak bisa ditanya lagi.');
+		// Notes made from several boxes list them all; older notes have just the owner.
+		const marks = ((note?.customData?.marks as string[] | undefined) ?? [mark.id]).flatMap(id => find(api, id) ?? []).filter(element => !element.isDeleted);
 		let live = true;
-		cropMark(api, mark, target).then(
+		cropMark(api, marks, target).then(
 			crop => live && setImage(crop),
 			failure => live && setError(`Gagal memuat potongan halaman: ${failure.message}`),
 		);
@@ -180,7 +183,7 @@ export function ExplainSheet({ api, noteId, onClose }: { api: Api; noteId: strin
 			<header className="flex h-12 shrink-0 items-center gap-2 border-b border-line pr-2 pl-4">
 				<Icon name="sparkles" className="size-4 text-accent" />
 				<h2 className="font-heading text-sm font-semibold">Tanya lagi</h2>
-				<button onClick={onClose} className="ml-auto grid size-7 place-items-center rounded-md text-ink-faint transition-colors duration-150 hover:bg-black/[0.06] hover:text-ink" aria-label="Tutup">
+				<button onClick={onClose} className="ml-auto grid size-7 place-items-center rounded-md text-ink-faint transition-colors duration-150 hover:bg-tint/[0.06] hover:text-ink" aria-label="Tutup">
 					<Icon name="x" />
 				</button>
 			</header>

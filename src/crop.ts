@@ -1,6 +1,6 @@
 import type { ExcalidrawElement, ExcalidrawImageElement } from '@excalidraw/excalidraw/element/types';
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
-import { overlap, type Box } from './geometry.ts';
+import { bounds, overlap, type Box } from './geometry.ts';
 import { renderPage } from './pdf.ts';
 
 export type PageData = { pdf: string; page: number };
@@ -12,20 +12,21 @@ export const pageUnder = (api: ExcalidrawImperativeAPI, box: ExcalidrawElement) 
 		.filter((element): element is ExcalidrawImageElement => element.type === 'image' && element.id !== box.id && !!element.fileId && overlap(element, box) > 0)
 		.sort((a, b) => overlap(b, box) - overlap(a, box))[0];
 
-/** What DeepSeek sees for a mark: the page around it, with the mark outlined in red. */
-export async function cropMark(api: ExcalidrawImperativeAPI, box: Box, target: ExcalidrawImageElement): Promise<string> {
+/** What DeepSeek sees for a mark: the page around it, with the mark outlined in red. Several boxes (a phrase across lines) count as one mark. */
+export async function cropMark(api: ExcalidrawImperativeAPI, marks: readonly Box[], target: ExcalidrawImageElement): Promise<string> {
 	const page = pageOf(target);
 	const src = api.getFiles()[target.fileId!]?.dataURL ?? (page ? await renderPage(page.pdf, page.page) : null);
 	if (!src) throw new Error('gambarnya belum termuat');
-	return crop(src, target, box);
+	return crop(src, target, marks);
 }
 
 /**
- * The part of `image` around `box`, cut from its bitmap, with the box itself outlined in red.
+ * The part of `image` around `marks`, cut from its bitmap, with each mark outlined in red.
  * The margin gives the model the surrounding words, so a tight box on one word (or one that clips a letter) still reads right.
  * Small marks are scaled up so the model can read them.
  */
-async function crop(src: string, image: Box, box: Box): Promise<string> {
+async function crop(src: string, image: Box, marks: readonly Box[]): Promise<string> {
+	const box = bounds(marks);
 	const bitmap = new Image();
 	bitmap.src = src;
 	await bitmap.decode();
@@ -44,6 +45,6 @@ async function crop(src: string, image: Box, box: Box): Promise<string> {
 	context.drawImage(bitmap, (left - image.x) * sx, (top - image.y) * sy, width, height, 0, 0, canvas.width, canvas.height);
 	context.strokeStyle = '#e03131';
 	context.lineWidth = Math.max(3, canvas.width / 200);
-	context.strokeRect((box.x - left) * sx * up, (box.y - top) * sy * up, box.width * sx * up, box.height * sy * up);
+	for (const mark of marks) context.strokeRect((mark.x - left) * sx * up, (mark.y - top) * sy * up, mark.width * sx * up, mark.height * sy * up);
 	return canvas.toDataURL('image/jpeg', 0.9);
 }

@@ -7,6 +7,8 @@
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 		<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Sans:wght@500;600&display=swap" />
 		<title>coret</title>
+		<!-- before first paint, so a dark-mode reload doesn't flash light -->
+		<script>try { if (localStorage.getItem('coret:theme') === 'dark') document.documentElement.classList.add('dark'); } catch {}</script>
 	</head>
 	<body>
 		<div id="root"></div>
