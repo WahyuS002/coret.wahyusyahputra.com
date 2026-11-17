@@ -5,12 +5,24 @@ import worker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 GlobalWorkerOptions.workerSrc = worker;
 
+// pdf.js fetches decoders (JBIG2/JPEG 2000 in scanned books) and non-embedded fonts by file name; without them those pages render blank.
+const data = import.meta.glob<string>(['../node_modules/pdfjs-dist/wasm/*.wasm', '../node_modules/pdfjs-dist/standard_fonts/*'], { query: '?url', import: 'default', eager: true });
+const urls = new Map(Object.entries(data).map(([path, url]) => [path.split('/').pop()!, url]));
+class BinaryDataFactory {
+	async fetch({ filename }: { filename: string }) {
+		const url = urls.get(filename);
+		if (!url) throw new Error(`pdf.js data not bundled: ${filename}`);
+		return new Uint8Array(await (await fetch(url)).arrayBuffer());
+	}
+}
+const load = (source: { url: string } | { data: Uint8Array }) => getDocument({ ...source, BinaryDataFactory });
+
 export const PAGE_WIDTH = 800; // scene units; every page is scaled to this width
 export const PAGE_GAP = 60;
 
 const opened = new Map<string, Promise<PDFDocumentProxy>>();
 const open = (key: string) => {
-	if (!opened.has(key)) opened.set(key, getDocument({ url: `/api/files/${key}` }).promise);
+	if (!opened.has(key)) opened.set(key, load({ url: `/api/files/${key}` }).promise);
 	return opened.get(key)!;
 };
 
@@ -19,7 +31,7 @@ const open = (key: string) => {
  * Pass the local `file` right after uploading it so it isn't downloaded back.
  */
 export async function pageElements(key: string, file?: File) {
-	if (file) opened.set(key, getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise);
+	if (file) opened.set(key, load({ data: new Uint8Array(await file.arrayBuffer()) }).promise);
 	const pdf = await open(key);
 	let y = 0;
 	const pages = [];
