@@ -6,12 +6,14 @@ import { explain, loadScene, saveScene, uploadFile, type Item, type Scene } from
 import { followOwners, type Part } from './explanations.ts';
 import { bounds, overlap, wrap } from './geometry.ts';
 import { cropMark, pageOf, pageUnder, type PageData } from './crop.ts';
-import { ExplainSheet, NoteButton } from './ExplainSheet.tsx';
+import { ExplainSheet, NoteButton, NoteCovers } from './ExplainSheet.tsx';
+import { Icon } from './Icon.tsx';
 import { pageElements, renderPage } from './pdf.ts';
 
 // Where each canvas was last viewed, kept per browser so a refresh lands back on the same spot.
 type View = { scrollX: number; scrollY: number; zoom: number };
 const viewKey = (id: string) => `coret:view:${id}`;
+const hideKey = (id: string) => `coret:hide:${id}`;
 function lastView(id: string): View | null {
 	try {
 		const view = JSON.parse(localStorage.getItem(viewKey(id)) ?? 'null') as View | null;
@@ -61,6 +63,24 @@ export function Canvas({ item }: { item: Item }) {
 	const container = useRef<HTMLDivElement>(null);
 	const area = useRef<HTMLDivElement>(null);
 	const [sheet, setSheet] = useState<string | null>(null); // the note whose conversation is open
+	// With notes hidden, rereading means recalling each answer first. Remembered per canvas; notes revealed (or made) this visit stay shown until the canvas is left.
+	const [hidden, setHidden] = useState(() => {
+		try {
+			return localStorage.getItem(hideKey(item.id)) === '1';
+		} catch {
+			return false;
+		}
+	});
+	const [revealed, setRevealed] = useState(() => new Set<string>());
+	const reveal = (id: string) => setRevealed(shown => new Set(shown).add(id));
+	function toggleHidden() {
+		const next = !hidden;
+		setHidden(next);
+		if (next) setSheet(null);
+		try {
+			localStorage.setItem(hideKey(item.id), next ? '1' : '0');
+		} catch {}
+	}
 
 	useEffect(() => {
 		loadScene(item.id)
@@ -198,6 +218,7 @@ export function Canvas({ item }: { item: Item }) {
 			}
 
 			const id = crypto.randomUUID();
+			reveal(id); // just asked: shown even with notes hidden
 			const start = { x: box.x + box.width, y: box.y + box.height / 2 };
 			// restoreElements moves the arrow's first point to 0,0 as Excalidraw expects; left as converted, dragging the note flings the arrow off-canvas
 			const arrowId = crypto.randomUUID();
@@ -261,13 +282,17 @@ export function Canvas({ item }: { item: Item }) {
 					renderTopRightUI={() => (
 						<div className="flex items-center gap-2">
 							{status && <span className="max-w-64 truncate text-xs text-ink-muted">{status}</span>}
+							<button onClick={toggleHidden} className="grid size-9 place-items-center rounded-lg bg-paper text-ink-muted ring-1 ring-line-strong transition-colors duration-150 hover:bg-active hover:text-ink" title={hidden ? 'Tampilkan penjelasan' : 'Sembunyikan penjelasan'} aria-label={hidden ? 'Tampilkan penjelasan' : 'Sembunyikan penjelasan'} aria-pressed={hidden}>
+								<Icon name={hidden ? 'eyeOff' : 'eye'} />
+							</button>
 							<button onClick={explainSelection} disabled={busy} className="rounded-lg bg-ink px-3.5 py-2 text-sm font-medium text-paper transition-colors duration-150 hover:bg-ink/85 disabled:opacity-50" title="Kotakin bagian halaman, pilih kotaknya (Shift+klik untuk beberapa baris), lalu klik">
 								{busy ? '…' : 'Jelaskan'}
 							</button>
 						</div>
 					)}
 				/>
-				{api && <NoteButton api={api} area={area} onOpen={setSheet} />}
+				{api && hidden && <NoteCovers api={api} area={area} shown={revealed} onReveal={reveal} />}
+				{api && <NoteButton api={api} area={area} onOpen={setSheet} covered={id => hidden && !revealed.has(id)} />}
 			</div>
 			{api && sheet && <ExplainSheet key={sheet} api={api} noteId={sheet} onClose={() => setSheet(null)} />}
 		</div>

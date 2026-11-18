@@ -69,8 +69,69 @@ function updateNote(api: Api, noteId: string, turns: Turn[], shown: number) {
 	});
 }
 
-/** A sparkle on the top-right corner of the note under the pointer, or of the selected one (touch has no hover). */
-export function NoteButton({ api, area, onOpen }: { api: Api; area: RefObject<HTMLDivElement | null>; onOpen: (noteId: string) => void }) {
+/** The note under a pointer event on `area`, with `reach` screen pixels of slack around it. */
+function noteAt(api: Api, area: HTMLElement, event: PointerEvent, reach = 0, skip?: (noteId: string) => boolean) {
+	const { scrollX, scrollY, zoom } = api.getAppState();
+	const rect = area.getBoundingClientRect();
+	const x = (event.clientX - rect.left) / zoom.value - scrollX;
+	const y = (event.clientY - rect.top) / zoom.value - scrollY;
+	const r = reach / zoom.value;
+	return api.getSceneElements().find(note => isNote(note) && !skip?.(note.id) && x >= note.x - r && x <= note.x + note.width + r && y >= note.y - r && y <= note.y + note.height + r);
+}
+
+/** Hides the text of every note not in `shown` behind a "?"; pressing one reveals it. The box and its arrow stay visible. */
+export function NoteCovers({ api, area, shown, onReveal }: { api: Api; area: RefObject<HTMLDivElement | null>; shown: Set<string>; onReveal: (noteId: string) => void }) {
+	const [, redraw] = useReducer((n: number) => n + 1, 0);
+
+	useEffect(() => {
+		const element = area.current;
+		if (!element) return;
+		// The covers let the wheel and drags through to the canvas; only a press on a covered note is caught, before Excalidraw sees it.
+		const down = (event: PointerEvent) => {
+			const note = noteAt(api, element, event, 0, id => shown.has(id));
+			if (!note) return;
+			event.stopPropagation();
+			event.preventDefault();
+			onReveal(note.id);
+		};
+		element.addEventListener('pointerdown', down, true);
+		const offChange = api.onChange(redraw);
+		const offScroll = api.onScrollChange(redraw);
+		return () => {
+			element.removeEventListener('pointerdown', down, true);
+			offChange();
+			offScroll();
+		};
+	}, [api, area, shown, onReveal]);
+
+	const { scrollX, scrollY, zoom } = api.getAppState();
+	const inset = 4; // scene units, so the note's own border shows around the cover
+	// ponytail: one div per note in the whole canvas; skip off-screen ones if a book collects hundreds
+	return api
+		.getSceneElements()
+		.filter(note => isNote(note) && !shown.has(note.id))
+		.map(note => (
+			<div
+				key={note.id}
+				style={{
+					left: (note.x + inset + scrollX) * zoom.value,
+					top: (note.y + inset + scrollY) * zoom.value,
+					width: Math.max(0, note.width - 2 * inset) * zoom.value,
+					height: Math.max(0, note.height - 2 * inset) * zoom.value,
+					borderRadius: 12 * zoom.value,
+					fontSize: Math.min(note.height * 0.5, 28) * zoom.value,
+				}}
+				// The canvas stays light in dark mode, so the cover keeps the canvas grey too.
+				className="pointer-events-none absolute z-[2] grid place-items-center bg-canvas font-heading font-semibold text-[#9b9990]"
+				aria-hidden
+			>
+				?
+			</div>
+		));
+}
+
+/** A sparkle on the top-right corner of the note under the pointer, or of the selected one (touch has no hover). Not on a covered note: its conversation holds the answer. */
+export function NoteButton({ api, area, onOpen, covered }: { api: Api; area: RefObject<HTMLDivElement | null>; onOpen: (noteId: string) => void; covered: (noteId: string) => boolean }) {
 	const [hovered, setHovered] = useState<string | null>(null);
 	const [, redraw] = useReducer((n: number) => n + 1, 0);
 
@@ -78,12 +139,7 @@ export function NoteButton({ api, area, onOpen }: { api: Api; area: RefObject<HT
 		const element = area.current;
 		if (!element) return;
 		const move = (event: PointerEvent) => {
-			const { scrollX, scrollY, zoom } = api.getAppState();
-			const rect = element.getBoundingClientRect();
-			const x = (event.clientX - rect.left) / zoom.value - scrollX;
-			const y = (event.clientY - rect.top) / zoom.value - scrollY;
-			const reach = 20 / zoom.value; // so moving onto the button, which overhangs the corner, keeps it
-			const note = api.getSceneElements().find(note => isNote(note) && x >= note.x - reach && x <= note.x + note.width + reach && y >= note.y - reach && y <= note.y + note.height + reach);
+			const note = noteAt(api, element, event, 20); // reach: moving onto the button, which overhangs the corner, keeps it
 			setHovered(note?.id ?? null);
 		};
 		const leave = () => setHovered(null);
@@ -105,7 +161,7 @@ export function NoteButton({ api, area, onOpen }: { api: Api; area: RefObject<HT
 	const ids = Object.keys(selectedElementIds);
 	const selected = ids.length === 1 ? find(api, ids[0]) : undefined;
 	const note = [find(api, hovered), selected, selected?.type === 'text' ? find(api, selected.containerId) : undefined].find(isNote);
-	if (!note) return null;
+	if (!note || covered(note.id)) return null;
 	return (
 		<button
 			onClick={() => onOpen(note.id)}
