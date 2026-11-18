@@ -130,8 +130,11 @@ export function NoteCovers({ api, area, shown, onReveal }: { api: Api; area: Ref
 		));
 }
 
-/** A sparkle on the top-right corner of the note under the pointer, or of the selected one (touch has no hover). Not on a covered note: its conversation holds the answer. */
-export function NoteButton({ api, area, onOpen, covered }: { api: Api; area: RefObject<HTMLDivElement | null>; onOpen: (noteId: string) => void; covered: (noteId: string) => boolean }) {
+/**
+ * A sparkle on the top-right corner of the note under the pointer, or of the selected one (touch has no hover). Not on a covered note: its conversation holds the answer.
+ * With `onCover` (notes hidden), a crossed eye beside it covers the note again.
+ */
+export function NoteButton({ api, area, onOpen, covered, onCover }: { api: Api; area: RefObject<HTMLDivElement | null>; onOpen: (noteId: string) => void; covered: (noteId: string) => boolean; onCover?: (noteId: string) => void }) {
 	const [hovered, setHovered] = useState<string | null>(null);
 	const [, redraw] = useReducer((n: number) => n + 1, 0);
 
@@ -162,19 +165,19 @@ export function NoteButton({ api, area, onOpen, covered }: { api: Api; area: Ref
 	const selected = ids.length === 1 ? find(api, ids[0]) : undefined;
 	const note = [find(api, hovered), selected, selected?.type === 'text' ? find(api, selected.containerId) : undefined].find(isNote);
 	if (!note || covered(note.id)) return null;
+	const corner = { left: (note.x + note.width + scrollX) * zoom.value, top: (note.y + scrollY) * zoom.value };
+	const round = 'absolute z-[3] grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-paper shadow-[0_1px_2px_rgb(0_0_0/0.12),0_4px_12px_-4px_rgb(0_0_0/0.2)] ring-1 ring-line-strong transition-colors duration-150';
 	return (
-		<button
-			onClick={() => onOpen(note.id)}
-			style={{
-				left: (note.x + note.width + scrollX) * zoom.value,
-				top: (note.y + scrollY) * zoom.value,
-			}}
-			className="absolute z-[3] grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-paper text-accent shadow-[0_1px_2px_rgb(0_0_0/0.12),0_4px_12px_-4px_rgb(0_0_0/0.2)] ring-1 ring-line-strong transition-colors duration-150 hover:bg-accent-soft"
-			title="Tanya lagi"
-			aria-label="Tanya lagi tentang catatan ini"
-		>
-			<Icon name="sparkles" className="size-4" />
-		</button>
+		<>
+			{onCover && (
+				<button onClick={() => onCover(note.id)} style={{ ...corner, left: corner.left - 34 }} className={`${round} text-ink-muted hover:bg-active hover:text-ink`} title="Tutup lagi" aria-label="Tutup lagi catatan ini">
+					<Icon name="eyeOff" className="size-4" />
+				</button>
+			)}
+			<button onClick={() => onOpen(note.id)} style={corner} className={`${round} text-accent hover:bg-accent-soft`} title="Tanya lagi" aria-label="Tanya lagi tentang catatan ini">
+				<Icon name="sparkles" className="size-4" />
+			</button>
+		</>
 	);
 }
 

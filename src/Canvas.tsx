@@ -73,10 +73,21 @@ export function Canvas({ item }: { item: Item }) {
 	});
 	const [revealed, setRevealed] = useState(() => new Set<string>());
 	const reveal = (id: string) => setRevealed(shown => new Set(shown).add(id));
+	const cover = (id: string) => {
+		setSheet(open => (open === id ? null : open)); // its conversation holds the answer
+		setRevealed(shown => {
+			const next = new Set(shown);
+			next.delete(id);
+			return next;
+		});
+	};
 	function toggleHidden() {
 		const next = !hidden;
 		setHidden(next);
-		if (next) setSheet(null);
+		if (next) {
+			setSheet(null);
+			setRevealed(new Set()); // turning it on covers every note again
+		}
 		try {
 			localStorage.setItem(hideKey(item.id), next ? '1' : '0');
 		} catch {}
@@ -292,7 +303,7 @@ export function Canvas({ item }: { item: Item }) {
 					)}
 				/>
 				{api && hidden && <NoteCovers api={api} area={area} shown={revealed} onReveal={reveal} />}
-				{api && <NoteButton api={api} area={area} onOpen={setSheet} covered={id => hidden && !revealed.has(id)} />}
+				{api && <NoteButton api={api} area={area} onOpen={setSheet} covered={id => hidden && !revealed.has(id)} onCover={hidden ? cover : undefined} />}
 			</div>
 			{api && sheet && <ExplainSheet key={sheet} api={api} noteId={sheet} onClose={() => setSheet(null)} />}
 		</div>
