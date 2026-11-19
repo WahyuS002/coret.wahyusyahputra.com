@@ -11,6 +11,17 @@ export function bounds(boxes: readonly Box[]): Box {
 	return { x, y, width: Math.max(...boxes.map(box => box.x + box.width)) - x, height: Math.max(...boxes.map(box => box.y + box.height)) - y };
 }
 
+/**
+ * Where to scroll so `page` is read from its top: centred across, zoomed to at least 100%, its top 80px below the screen's.
+ * A page that fits whole on screen (a landscape slide) is centred down too, so the screen's middle stays on it.
+ */
+export function landOn(page: Box, screen: { width: number; height: number }, zoom: number) {
+	const z = Math.max(zoom, 1);
+	const scrollX = screen.width / (2 * z) - (page.x + page.width / 2);
+	const scrollY = page.height * z <= screen.height ? screen.height / (2 * z) - (page.y + page.height / 2) : 80 / z - page.y;
+	return { scrollX, scrollY, zoom: z };
+}
+
 /** Breaks a gloss into lines, since a labelled box grows to fit its text instead of wrapping it. */
 export function wrap(text: string, width = 30): string {
 	const lines: string[] = [];

@@ -1,10 +1,10 @@
 import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements, getSceneVersion, newElementWith, restoreElements } from '@excalidraw/excalidraw';
 import type { ExcalidrawElement, ExcalidrawImageElement, FileId } from '@excalidraw/excalidraw/element/types';
 import type { BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI, NormalizedZoomValue } from '@excalidraw/excalidraw/types';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { explain, loadScene, saveScene, uploadFile, type Item, type Scene } from './api.ts';
 import { followOwners, type Part } from './explanations.ts';
-import { bounds, overlap, wrap } from './geometry.ts';
+import { bounds, landOn, overlap, wrap } from './geometry.ts';
 import { cropMark, pageOf, pageUnder, type PageData } from './crop.ts';
 import { ExplainSheet, NoteButton, NoteCovers } from './ExplainSheet.tsx';
 import { Icon } from './Icon.tsx';
@@ -293,6 +293,7 @@ export function Canvas({ item }: { item: Item }) {
 					renderTopRightUI={() => (
 						<div className="flex items-center gap-2">
 							{status && <span className="max-w-64 truncate text-xs text-ink-muted">{status}</span>}
+							{api && <PageJump api={api} />}
 							<button onClick={toggleHidden} className="grid size-9 place-items-center rounded-lg bg-paper text-ink-muted ring-1 ring-line-strong transition-colors duration-150 hover:bg-active hover:text-ink" title={hidden ? 'Tampilkan penjelasan' : 'Sembunyikan penjelasan'} aria-label={hidden ? 'Tampilkan penjelasan' : 'Sembunyikan penjelasan'} aria-pressed={hidden}>
 								<Icon name={hidden ? 'eyeOff' : 'eye'} />
 							</button>
@@ -307,5 +308,55 @@ export function Canvas({ item }: { item: Item }) {
 			</div>
 			{api && sheet && <ExplainSheet key={sheet} api={api} noteId={sheet} onClose={() => setSheet(null)} />}
 		</div>
+	);
+}
+
+/** "12 / 300": the page under the screen's middle, and a box to type a page number to jump to. Hidden on a canvas without a PDF. */
+function PageJump({ api }: { api: ExcalidrawImperativeAPI }) {
+	const [, redraw] = useReducer((n: number) => n + 1, 0);
+	const [draft, setDraft] = useState<string | null>(null); // what's being typed; null shows the current page
+	const last = useRef(1); // kept while the middle is in a gap between pages or off the PDF
+
+	useEffect(() => {
+		const offChange = api.onChange(redraw);
+		const offScroll = api.onScrollChange(redraw);
+		return () => {
+			offChange();
+			offScroll();
+		};
+	}, [api]);
+
+	const pages = (api.getSceneElements() as readonly ExcalidrawElement[]).filter(element => element.type === 'image' && pageOf(element)).sort((a, b) => pageOf(a)!.page - pageOf(b)!.page);
+	if (!pages.length) return null;
+	const { scrollY, zoom, width, height } = api.getAppState();
+	const middle = -scrollY + height / 2 / zoom.value;
+	const under = pages.findIndex(page => page.y <= middle && middle <= page.y + page.height);
+	if (under >= 0) last.current = under + 1;
+
+	function jump() {
+		const n = Number.parseInt(draft ?? '', 10);
+		if (Number.isNaN(n)) return;
+		const view = landOn(pages[Math.min(Math.max(n, 1), pages.length) - 1], { width, height }, zoom.value);
+		api.updateScene({ appState: { scrollX: view.scrollX, scrollY: view.scrollY, zoom: { value: view.zoom as NormalizedZoomValue } } });
+	}
+
+	return (
+		<label className="flex h-9 items-center gap-1 rounded-lg bg-paper px-2.5 text-sm text-ink-muted tabular-nums ring-1 ring-line-strong" title="Ketik nomor halaman, lalu Enter">
+			<input
+				value={draft ?? String(last.current)}
+				onChange={event => setDraft(event.target.value)}
+				onFocus={event => event.target.select()}
+				onBlur={() => setDraft(null)}
+				onKeyDown={event => {
+					if (event.key === 'Enter') jump();
+					if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+				}}
+				inputMode="numeric"
+				aria-label="Nomor halaman"
+				style={{ width: `${String(pages.length).length + 1}ch` }}
+				className="rounded bg-transparent text-right text-ink outline-none focus:bg-active"
+			/>
+			<span>/ {pages.length}</span>
+		</label>
 	);
 }
